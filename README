@@ -1,11 +1,15 @@
 minimap.el --- Minimap sidebar for Emacs
 
+Copyright (C) 2012 Ilya Khaprov
 Copyright (C) 2011 Dustin Lacewell
 
-Authors: Dustin Lacewell <dlacewell@gmail.com>
+Authors: 
+	 Ilya Khaprov <dead.trickster@gmail.com>
+         Dustin Lacewell <dlacewell@gmail.com>
          David Engster <dengste@eml.cc>
+
 Keywords: minimap
-Version: 0.1
+Version: 0.2
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -21,7 +25,14 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ==Commentary:==
+* This fork is an attempt to rewrite this using event-based approach
+instead of timer.
+* Don't reset minimap buffer every time.   
+* I'm trying to avoid with-window or with-buffer
+macros since they ruin user experience.   
+* More performance and stability improvements
 
+==Original Commentary by Dustin:==
 Heavily based off minimap.el by David Engster however I
 have refactored it a bit to support only a single global
 minimap window. Usually this should be opened on startup
