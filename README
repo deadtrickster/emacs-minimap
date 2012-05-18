@@ -28,9 +28,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 * This fork is an attempt to rewrite this using event-based approach
 instead of timer.
 * Don't reset minimap buffer every time.   
+* Use sticky-windows if available
+* Do not kill minimap window if parent buffer killed
+* Sizing options: relative size and fixed (without resizing)
 * I'm trying to avoid with-window or with-buffer
 macros since they ruin user experience.   
 * More performance and stability improvements
+
+
 
 ==Original Commentary by Dustin:==
 Heavily based off minimap.el by David Engster however I
