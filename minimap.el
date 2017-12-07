@@ -15,7 +15,7 @@
 ;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
 ;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-;; GNU General Public License for more details.
+;; GNU Generafefl Public License for more details.
 ;;
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
@@ -120,8 +120,8 @@ Note: you must rebind your usual window management hotkeys to sticky-windows fun
   :type 'boolean
   :group 'minimap)
 
-(defcustom minimap-buffer-name-prefix "*MINIMAP*"
-  "Prefix for buffer names of minimap sidebar."
+(defcustom minimap-buffer-name-prefix " *MINIMAP*"
+  "Prefix for buffer names of minimap sidebar. Note: if it starts with space it's not ineresting at all"
   :type 'string
   :group 'minimap)
 
@@ -231,37 +231,45 @@ minimap buffer."
 
 ;;; Internal variables
 
-(defvar minimap-start nil)
-(defvar minimap-end nil)
+(defvar minimap-active-overlay-start nil)
+(defvar minimap-active-overlay-end nil)
 (defvar minimap-active-overlay nil)
 (defvar minimap-window nil)
 (defvar minimap-timer-object nil)
 (defvar minimap-scroll-hook-added nil)
+(defvar minimap-scroll-hook-enabled nil)
 (defvar minimap-base-overlay nil)
 (defvar minimap-numlines nil)
 (defvar minimap-pointmin-overlay nil)
+(defvar minimap-is-minimap-buffer nil)
 
-(make-variable-buffer-local 'minimap-start)
-(make-variable-buffer-local 'minimap-end)
+(make-variable-buffer-local 'minimap-active-overlay-start)
+(make-variable-buffer-local 'minimap-active-overlay-end)
 (make-variable-buffer-local 'minimap-active-overlay)
 (make-variable-buffer-local 'minimap-base-overlay)
 (make-variable-buffer-local 'minimap-numlines)
-(make-variable-buffer-local 'minimap-pointmin-overlay)
+(make-variable-buffer-local 'minimap-pointmin-overlay) 
+(make-variable-buffer-local 'minimap-is-minimap-buffer)
 
-(defun minimap-on-window-scroll-hook (window start-pos)
-  (message (number-to-string start-pos))
-  (minimap-update))
+(defun minimap-on-window-scroll-hook (original-window start-pos)
+  (when minimap-window-scroll-hook-enabled
+    (minimap-update)))
+
+(defun minimap-disable-window-scroll-hook ()
+  (setq minimap-window-scroll-hook-enabled nil))
+
+(defun minimap-enable-window-scroll-hook ()
+  (setq minimap-window-scroll-hook-enabled t))
 
 (defun minimap-add-window-scroll-hook ()
-  (unless minimap-scroll-hook-added
+  (unless minimap-scroll-hook-added)
     (add-hook 'window-scroll-functions #'minimap-on-window-scroll-hook)
-    (setq minimap-scroll-hook-added t)))
+    (minimap-enable-window-scroll-hook)
+    (setq minimap-scroll-hook-added t))
 
 (defun minimap-remove-window-scroll-hook ()
   (remove-hook 'window-scroll-functions #'minimap-on-window-scroll-hook)
   (setq minimap-scroll-hook-added nil))
-      
-
 
 (defun minimap-toggle ()
   "Toggle the minimap."
@@ -271,122 +279,131 @@ minimap buffer."
       (minimap-kill)
     (minimap-create)))
 
-(defun minimap-buffer-name()
-  "Get minimap buffer name for current buffer"
-  (concat minimap-buffer-name-prefix " " (buffer-name (current-buffer))))
+(defun minimap-buffer-name-for-buffer (&optional buffer)
+  "Get minimap buffer name for buffer (defaults to current-buffer)"
+  (unless buffer
+    (setq buffer (current-buffer)))
+  (concat minimap-buffer-name-prefix " " (buffer-name buffer)))
+
+(defun minimap-buffer-for-buffer (&optional buffer)
+  "Get minimap buffer for buffer (defaults to current-buffer)"
+  (unless buffer
+    (setq buffer (current-buffer)))
+  (get-buffer (minimap-buffer-name-for-buffer buffer)))
+
+(defun minimap-buffer-p (&optional buffer)
+  "Returns t if buffer (default is current-buffer) is a minimap buffer"
+  (interactive)
+  (unless buffer
+    (setq buffer (current-buffer)))
+  (buffer-local-value 'minimap-is-minimap-buffer buffer))
+
+(defun minimap-active-p ()
+  (interactive)
+  (if minimap-window
+      (window-live-p minimap-window)))
 
 ;;;###autoload
-(defun minimap-create()
-  "Create the minimap sidebar"
+
+
+(defun minimap-create-window ()
   (interactive)
-  (let ((was_created)
-        (current_buffer (current-buffer))
-        (raw_buffer_name (buffer-name (current-buffer)))
-        (buffer_name (minimap-buffer-name))
-        (original_window (selected-window))
-	(minimap-window-width (if minimap-width-fixed
-				  minimap-width
+  (let ((minimap-window-width (if minimap-width-fixed
+				   minimap-width
 				(round (* (window-width) minimap-width-fraction)))))
-    ;; let progn
+    
+    (unless (split-window-horizontally
+	     minimap-window-width)
+      (message "Failed to create window. Try `delete-other-windows' (C-x 1) first.")
+      (return nil))
+    
+    (setq minimap-window (selected-window))
 
-    ;;; WINDOW CREATION
-    ;; don't operate on minimap windows
-    (unless (string-match minimap-buffer-name-prefix raw_buffer_name)
-      ;; if minimap window is open
-      (if (and minimap-window
-               (window-live-p minimap-window))
-          (progn
-            ;; switch to it
-            (select-window minimap-window)
-            ;; kill existing buffer if there is one
-            (when (string-match minimap-buffer-name-prefix
-                                (buffer-name (current-buffer)))
-              
-              (when minimap-dedicated-window
-                (set-window-dedicated-p minimap-window nil))
-              (kill-buffer)))
-        ;; otherwise split current window
-        (unless (split-window-horizontally
-                 minimap-window-width)
-          (message "Failed to create window. Try `delete-other-windows' (C-x 1) first.")
-          (return nil))
-
-	(when minimap-width-fixed
-	  (setq window-size-fixed 'width))
-
-        ;; save new window to variable
-        (setq minimap-window (selected-window))
-        (setq was_created t))
-      
-      ;;; BUFFER CREATION
-      (select-window minimap-window)
-      (when minimap-dedicated-window
-        (set-window-dedicated-p minimap-window nil))
-      ;; if minimap buffer exists
-      (if (get-buffer buffer_name)
-          ;; show it
-          (switch-to-buffer buffer_name t)
-        ;; otherwise create new minimap buffer
-        (minimap-new-minimap buffer_name current_buffer)
-	(cond ((eq minimap-update-source 'timer)
-	       ;; initialize timer
-	       (unless minimap-timer-object
-		 (setq minimap-timer-object
-		       (run-with-idle-timer minimap-update-delay t 'minimap-update))))
-	      ((eq minimap-update-source 'hook)
-	       (minimap-add-window-scroll-hook)
-	       )))
-      (if was_created
-          (other-window 1)
-        (select-window original_window))
-      (minimap-sync-overlays)
-
-      (when minimap-dedicated-window
-        (set-window-dedicated-p minimap-window 1))
-      (when (and minimap-dedicated-window
-		 minimap-use-sticky-windows)
-	(sticky-window-keep-window-visible minimap-window)))))
-
-(defun minimap-new-minimap (buffer_name target_buffer)
-  "Create new minimap indirect-buffer pointing to target"
-  (unless (or (string-match minimap-buffer-name-prefix (buffer-name target_buffer))
-              (string-match "minibuf" (buffer-name target_buffer)))
-    (let ((indirect_buffer (make-indirect-buffer target_buffer buffer_name t))
-          (edges (window-pixel-edges)))
-      ;; let progn
-      (set-buffer indirect_buffer)
-      ;; hide scrollbars?
-      (when minimap-hide-scroll-bar
-        (setq vertical-scroll-bar nil))
-      ;; show buffer
-      (switch-to-buffer indirect_buffer)
+    (minimap-create-buffer)
+    
+    (when minimap-width-fixed
+      (setq window-size-fixed 'width))
+    
+    (when (and minimap-dedicated-window
+	       minimap-use-sticky-windows)
+      (sticky-window-keep-window-visible minimap-window))))
+  
+(defun create-base-overlay ()
       (setq minimap-base-overlay (make-overlay (point-min) (point-max) nil t t))
-      (overlay-put minimap-base-overlay 'face 'minimap-font-face)
-      (setq minimap-pointmin-overlay (make-overlay (point-min) (1+ (point-min))))
-      
-      ;; "main" overlay
-      (setq minimap-start (window-start)
-            minimap-end (window-end)
-            minimap-active-overlay (make-overlay minimap-start minimap-end)
-            line-spacing 0)
-      (overlay-put minimap-active-overlay 'face
-                   'minimap-active-region-background)
-      (overlay-put minimap-active-overlay 'priority 5)
-      
-      (minimap-mode 1)
-      
-      (when (and (boundp 'linum-mode)
-                 linum-mode)
-        (linum-mode 0))
-      (when minimap-hide-fringes
-        (set-window-fringes nil 0 0))
-      ;; Calculate the actual number of lines displayable with the minimap face.
-      
-      (setq minimap-numlines
-            (floor
-             (/
-              (- (nth 3 edges) (nth 1 edges))
-              (car (progn (redisplay) (window-line-height)))))))))
+      (overlay-put minimap-base-overlay 'face 'minimap-font-face))
+
+(defun create-active-overlay ()
+  (message "creating active overlay")
+  (let (active-overlay-start active-overlay-end)
+    (with-current-buffer original-buffer
+      (setq minimap-active-overlay-start (window-start original-window)
+	    minimap-active-overlay-end (window-end original-window t)
+	    active-overlay-start minimap-active-overlay-start
+	    active-overlay-end minimap-active-overlay-end))
+
+    (setq minimap-active-overlay (make-overlay active-overlay-start active-overlay-end)))
+  (overlay-put minimap-active-overlay 'face
+	       'minimap-active-region-background)
+  (overlay-put minimap-active-overlay 'priority 5))
+
+(defun minimap-switch-to-buffer (buffer)  
+  (set-window-dedicated-p minimap-window nil)
+  (with-selected-window minimap-window
+    (switch-to-buffer buffer)
+    (when minimap-hide-fringes
+      (set-window-fringes nil 0 0)))
+  (when minimap-dedicated-window
+    (set-window-dedicated-p minimap-window 1)))
+
+(defun minimap-create-buffer ()
+  "Create new minimap indirect-buffer pointing to target"
+  (interactive)
+  (let ((indirect_buffer (make-indirect-buffer original-buffer 
+					       (minimap-buffer-name-for-buffer original-buffer) t))
+	(edges (window-pixel-edges original-window)))
+    
+    (set-buffer indirect_buffer)    
+    
+    (setq minimap-is-minimap-buffer t)  
+    
+    (when (and (boundp 'linum-mode)
+	       linum-mode)
+      (linum-mode 0))
+    
+    (setq buffer-read-only t)
+    
+    (setq cursor-type nil)
+    
+    (when minimap-hide-scroll-bar
+      (setq vertical-scroll-bar nil))
+    
+    (create-base-overlay)
+    (create-active-overlay)        
+    
+    (minimap-mode 1)
+    
+    (minimap-switch-to-buffer indirect_buffer)
+    
+    indirect_buffer))
+
+(defun minimap-create ()
+  "Creates the muinimap sidebar"
+  (interactive)
+  (let ((original-buffer (current-buffer))) 
+    (when (string-match "minibuf" (buffer-name original-buffer))
+	(message "Hmm... minimap for minibuf?")
+	(return nil))
+    (let ((original-window (selected-window))
+	  (original-buffer (current-buffer)))
+      (minimap-create-window)
+      (select-window original-window))
+    (cond ((eq minimap-update-source 'timer)
+	   ;; initialize timer
+	   (unless minimap-timer-object
+	     (setq minimap-timer-object
+		   (run-with-idle-timer minimap-update-delay t 'minimap-update))))
+	  ((eq minimap-update-source 'hook)
+	   (minimap-add-window-scroll-hook)))))
 
 ;;;###autoload
 (defun minimap-kill ()
@@ -397,9 +414,9 @@ Cancel the idle timer if no more minimaps are active."
       (message "No minimap window found.")
     ;; kill all minimap buffers
     (set-window-dedicated-p minimap-window nil)
-    (dolist (ele (buffer-list))
-      (when (string-match minimap-buffer-name-prefix (buffer-name ele))
-        (kill-buffer ele)))
+    (dolist (buffer (buffer-list))
+      (when (minimap-buffer-p buffer)
+        (kill-buffer buffer)))
     (delete-window minimap-window)
     (setq minimap-window nil)
     (when minimap-timer-object
@@ -412,48 +429,48 @@ Cancel the idle timer if no more minimaps are active."
 (defun minimap-valid-target()
   "Return t if valid minimap target"
   (interactive)
-  (not (or (string-match minimap-buffer-name-prefix  (buffer-name (current-buffer)))
-           (string-match "minibuf" (buffer-name (current-buffer))))))
+  (let ((current_buffer (current-buffer)))
+    (not (or (minimap-buffer-p current_buffer)
+	     (string-match "minibuf" (buffer-name current_buffer))))))
+
+(defun minimap-actualize-buffer (&optional original-buffer)
+  "Creates minimap buffer for current buffer if not created. Activates if not activated"
+  (unless original-buffer
+    (setq original-buffer (current-buffer)))
+  (let ((minimap_buffer (minimap-buffer-for-buffer original-buffer)))
+    (if (not minimap_buffer) 
+      (minimap-create-buffer)
+      (minimap-switch-to-buffer minimap_buffer))))
 
 
 (defun minimap-update (&optional force)
   "Update the minimap sidebar."
   (interactive)
-  (when (and minimap-window
-             (window-live-p minimap-window)
-             (minimap-valid-target))
-    (set-window-dedicated-p minimap-window nil)
-    (let (start end pt ov)
-      (unless (get-buffer (minimap-buffer-name))
-        (minimap-create))
-      (set-window-buffer minimap-window (minimap-buffer-name))
-      (setq start (window-start)
-            end (window-end)
-            pt (point)
-            ov)
-      (with-selected-window minimap-window
-        (unless (and (not force)
-                     (= minimap-start start)
-                     (= minimap-end end))
-          (move-overlay minimap-active-overlay start end)
-          (setq minimap-start start
-                minimap-end end)
-          (minimap-recenter (line-number-at-pos (/ (+ end start) 2))
-                            (/ (- (line-number-at-pos end)
-                                  (line-number-at-pos start))
-                               2)))
-        (goto-char pt)
-        (when minimap-always-recenter
-          (recenter (round (/ (window-height) 2))))
-        (when minimap-dedicated-window
-          (set-window-dedicated-p minimap-window 1))))))
+  (unless minimap-active-overlay-start
+    (setq minimap-active-overlay-start (window-start)))
+  (when (and (minimap-active-p)
+	     (minimap-valid-target)
+	     (not (equal (selected-window) minimap-window)))
+    (minimap-actualize-buffer)
+      (let* ((start start-pos) 
+	  (end (window-end original-window t))
+	  (pt  (if (> minimap-active-overlay-start start) start end)))  	
+
+      (with-selected-window minimap-window   
+	(goto-char pt)    
+	
+	(move-overlay minimap-active-overlay start end))
+      (setq minimap-active-overlay-start start
+	      minimap-active-overlay-end end))))
 
 ;;; Overlay movement
 (defun minimap-move-overlay-mouse (start-event)
   "Move overlay by tracking mouse movement."
   (interactive "e")
-  (mouse-set-point start-event)
+  ;(message (car start-event))
   (when (get-buffer-window (buffer-base-buffer (current-buffer)))
+    (minimap-disable-window-scroll-hook)
+    (mouse-set-point start-event)
     (let* ((echo-keystrokes 0)
            (end-posn (event-end start-event))
            (start-point (posn-point end-posn))
@@ -464,46 +481,48 @@ Cancel the idle timer if no more minimaps are active."
            pt ev)
       (when (and pcselmode (fboundp 'pc-selection-mode))
         (pc-selection-mode -1))
-      (move-overlay minimap-active-overlay start-point minimap-end)
+      ;(move-overlay minimap-active-overlay start-point minimap-end)
       (track-mouse
         (minimap-set-overlay start-point)
         (while (and
-                (consp (setq ev (read-event)))
-                (eq (car ev) 'mouse-movement))
-          (setq pt (posn-point (event-start ev)))
-          (when (numberp pt)
-            (minimap-set-overlay pt))))
-      (select-window (get-buffer-window (buffer-base-buffer)))
-      (minimap-update)
+            (setq ev (read-event))
+	    (eq (car ev) 'mouse-movement))
+	  (setq pt (posn-point (cadr ev)))
+	  (when (numberp pt)
+	    (minimap-set-overlay pt))))
+	
+      ;(select-window (get-buffer-window (buffer-base-buffer)))
+      ;;(minimap-update)
       (when (and pcselmode (fboundp 'pc-selection-mode))
-        (pc-selection-mode 1)))))
+        (pc-selection-mode 1)))
+    (select-window (get-buffer-window (buffer-base-buffer (current-buffer))))
+    (minimap-enable-window-scroll-hook)))
 
 (defun minimap-set-overlay (pt)
   "Set overlay position, with PT being the middle."
   (goto-char pt)
-  (let* ((ovstartline (line-number-at-pos minimap-start))
-         (ovendline (line-number-at-pos minimap-end))
+  (let* ((ovstartline (line-number-at-pos minimap-active-overlay-start))
+         (ovendline (line-number-at-pos minimap-active-overlay-end))
          (ovheight (round (/ (- ovendline ovstartline) 2)))
          (line (line-number-at-pos))
          (winstart (window-start))
-         (winend (window-end))
-         newstart newend)
-    (setq pt (point-at-bol))
+         (winend (window-end (selected-window) t))
+         newstart newend mmpt)
     (setq newstart (minimap-line-to-pos (- line ovheight)))
-    ;; Perform recentering
-    (minimap-recenter line ovheight)
-    ;; Set new position in main buffer and redisplay
-    (with-selected-window (get-buffer-window (buffer-base-buffer))
-      (goto-char pt)
-      (set-window-start nil newstart)
-      (redisplay t)
-      (setq newend (window-end)))
-    (when (eq minimap-recenter-type 'free)
-      (while (> newend winend)
-        (scroll-up 5)
-        (redisplay t)
-        (setq winend (window-end))))
-    (move-overlay minimap-active-overlay newstart newend)))
+    (setq newend (minimap-line-to-pos (+ line ovheight)))
+    (if (< newstart winstart)
+	(setq mmpt newstart))
+    (if (> newend winend)
+	(setq mmpt newend))
+
+    (when mmpt
+      (goto-char mmpt))
+
+    (move-overlay minimap-active-overlay newstart newend)
+    (let ((original-window (get-buffer-window (buffer-base-buffer))))
+      (set-window-start original-window newstart)    
+      (setq minimap-active-overlay-start newstart minimap-active-overlay-end (window-end original-window t)))
+  ))
 
 (defun minimap-line-to-pos (line)
   "Return point position of line number LINE."
@@ -579,7 +598,12 @@ active region."
 (defvar minimap-mode-map (make-sparse-keymap)
   "Keymap used by `minimap-mode'.")
 
+(defun minimap-mouse-up () 
+  (message "qwe")
+  (select-window (get-buffer-window (buffer-base-buffer))))
+
 (define-key minimap-mode-map [down-mouse-1] 'minimap-move-overlay-mouse)
+(define-key minimap-mode-map [mouse-1] 'minimap-mouse-up)					 
 (define-key minimap-mode-map [down-mouse-2] 'minimap-move-overlay-mouse)
 (define-key minimap-mode-map [down-mouse-3] 'minimap-move-overlay-mouse)
 
@@ -597,8 +621,8 @@ Apply semantic overlays or face enlargement if necessary."
         (semantic (and (boundp 'semantic-version)
                        (semantic-active-p)))
         ov props p)
-    (set-window-dedicated-p minimap-window nil)
-    (with-current-buffer (minimap-buffer-name)
+    ;(set-window-dedicated-p minimap-window nil)
+    (with-current-buffer (minimap-buffer-name-for-buffer)
       (remove-overlays)
       (while baseov
         (when (setq props (minimap-get-sync-properties (car baseov)))
@@ -619,7 +643,7 @@ Apply semantic overlays or face enlargement if necessary."
                             (not semantic)))))
       (when (eq font-lock-support-mode 'jit-lock-mode)
         (jit-lock-fontify-now))
-      (with-current-buffer (minimap-buffer-name)
+      (with-current-buffer (minimap-buffer-name-for-buffer)
         (minimap-enlarge-faces)))
     ;; Semantic overlays
     (when (and semantic
@@ -669,8 +693,8 @@ This has to be called from the base buffer."
                  (or (eq class 'function)
                      (eq class 'type)
                      (eq class 'variable)))
-        (message (minimap-buffer-name))
-        (with-current-buffer (minimap-buffer-name)
+        (message (minimap-buffer-name-for-buffer))
+        (with-current-buffer (minimap-buffer-name-for-buffer)
           (let ((start (overlay-start ov))
                 (end (overlay-end ov))
                 (name (semantic-tag-name tag)))
